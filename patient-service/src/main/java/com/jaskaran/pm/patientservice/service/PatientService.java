@@ -5,6 +5,7 @@ import com.jaskaran.pm.patientservice.dto.PatientResponseDTO;
 import com.jaskaran.pm.patientservice.exception.EmailAlreadyExistsException;
 import com.jaskaran.pm.patientservice.exception.PatientNotFoundException;
 import com.jaskaran.pm.patientservice.grpc.BillingServiceGrpcClient;
+import com.jaskaran.pm.patientservice.kafka.KafkaProducer;
 import com.jaskaran.pm.patientservice.mapper.PatientMapper;
 import com.jaskaran.pm.patientservice.model.Patient;
 import com.jaskaran.pm.patientservice.repository.PatientRepository;
@@ -20,11 +21,13 @@ public class PatientService {
     //dependency injection
     private final PatientRepository patientRepository;
     private final BillingServiceGrpcClient billingServiceGrpcClient;
+    private final KafkaProducer kafkaProducer;
 
 
-    public PatientService(PatientRepository patientRepository, BillingServiceGrpcClient billingServiceGrpcClient) {
+    public PatientService(PatientRepository patientRepository, BillingServiceGrpcClient billingServiceGrpcClient, KafkaProducer kafkaProducer) {
         this.patientRepository = patientRepository;
         this.billingServiceGrpcClient = billingServiceGrpcClient;
+        this.kafkaProducer = kafkaProducer;
     }
 
     public List<PatientResponseDTO> getPatients() {
@@ -35,13 +38,15 @@ public class PatientService {
     public PatientResponseDTO createPatient(PatientRequestDTO patientRequestDTO) {
 
         if (patientRepository.existsByEmail(patientRequestDTO.getEmail())) {
-            throw new EmailAlreadyExistsException("A patient withh this email" + "already exists" + patientRequestDTO.getEmail());
+            throw new EmailAlreadyExistsException("A patient with this email" + "already exists" + patientRequestDTO.getEmail());
         }
-        Patient mewPatient = patientRepository.save(PatientMapper.toModel(patientRequestDTO));
+        Patient newPatient = patientRepository.save(PatientMapper.toModel(patientRequestDTO));
 
-        billingServiceGrpcClient.createBillingAccount(mewPatient.getId().toString(), mewPatient.getName(), mewPatient.getEmail());
+        billingServiceGrpcClient.createBillingAccount(newPatient.getId().toString(), newPatient.getName(), newPatient.getEmail());
 
-        return PatientMapper.toDTO(mewPatient);
+        //Calling kafka events to notify when a new account is created
+        kafkaProducer.sendEvent(newPatient);
+        return PatientMapper.toDTO(newPatient);
     }
 
     public PatientResponseDTO updatePatient(UUID id, PatientRequestDTO patientRequestDTO) {
